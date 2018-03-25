@@ -34,3 +34,4 @@ While the current code is fairly functional, we could benefit from the following
 
 Thanks to [pytorch-classification](https://github.com/bearpaw/pytorch-classification) and [progress](https://github.com/verigak/progress).
 
+# chess-alpha-zero
