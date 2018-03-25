@@ -14,15 +14,15 @@ class Coach():
     in Game and NeuralNet. args are specified in main.py.
     """
     def __init__(self, game, nnet, args):
-        self.game = game
+        self.game = game #object of OthelloGame
         self.nnet = nnet
-        self.pnet = self.nnet.__class__(self.game)  # the competitor network
+        self.pnet = self.nnet.__class__(self.game)  # the competitor network - parent network(to validate selfplay model after learning)
         self.args = args
-        self.mcts = MCTS(self.game, self.nnet, self.args)
+        self.mcts = MCTS(self.game, self.nnet, self.args) #returns the MCTS object
         self.trainExamplesHistory = []    # history of examples from args.numItersForTrainExamplesHistory latest iterations
         self.skipFirstSelfPlay = False # can be overriden in loadTrainExamples()
 
-    def executeEpisode(self):
+    def executeEpisode(self): #one episode is one physical move on the board
         """
         This function executes one episode of self-play, starting with player 1.
         As the game is played, each turn is added as a training example to
@@ -38,27 +38,44 @@ class Coach():
                            pi is the MCTS informed policy vector, v is +1 if
                            the player eventually won the game, else -1.
         """
+        print ('Coach.py ==>executeEpisode')
         trainExamples = []
         board = self.game.getInitBoard()
+        print ('chessboard chess-pgn object: ', board)
+        print('-----------************----------')
         self.curPlayer = 1
         episodeStep = 0
 
         while True:
             episodeStep += 1
-            canonicalBoard = self.game.getCanonicalForm(board,self.curPlayer)
-            temp = int(episodeStep < self.args.tempThreshold)
+            print ('Coach.py ==>executeEpisode ', 'board: ', board, 'self.curPlayer: ', self.curPlayer)
+            canonicalBoard = self.game.getCanonicalForm(board,self.curPlayer) #gets the canonical board
+            print ('Coach.py ==>executeEpisode ', 'canonicalBoard: ', canonicalBoard) #canonical = player*board matrix
 
-            pi = self.mcts.getActionProb(canonicalBoard, temp=temp)
+            temp = int(episodeStep < self.args.tempThreshold) #tempThreshold: 15
+            #temp is the temperature and controls the degree of exploration.
+            #temp = 1 till num eps == 15 (threshold, simply the normalised counts) after that,
+            #temp = 0 (picking the move with the maximum counts) (greedy)
+
+            pi = self.mcts.getActionProb(canonicalBoard, temp=temp) #gets action probabilties
             sym = self.game.getSymmetries(canonicalBoard, pi)
+            #print ('Coach.py ==>executeEpisode ', 'probability pi: ', pi, 'Symmetries sym: ', sym)
+
+            # for b,p in sym:
+            #     trainExamples.append([b, self.curPlayer, p, None])
             for b,p in sym:
                 trainExamples.append([b, self.curPlayer, p, None])
+            action = np.random.choice(len(pi), p=pi) #Generates a random sample from a given 1-D array
+            print ('Coach.py ==>executeEpisode ', 'action: ', action)
 
-            action = np.random.choice(len(pi), p=pi)
+            #NOW MAKE THE ACTUAL PHYSICAL SUPER DUPER FINAL MOVE of MCTS by analysing MCTS
+
             board, self.curPlayer = self.game.getNextState(board, self.curPlayer, action)
-
+            print("FINAL SELECTED MOVE NEW BOARD: ", board)
             r = self.game.getGameEnded(board, self.curPlayer)
 
             if r!=0:
+                print ('Coach.py ==>executeEpisode ', 'returns: ', [(x[0],x[2],r*((-1)**(x[1]!=self.curPlayer))) for x in trainExamples])
                 return [(x[0],x[2],r*((-1)**(x[1]!=self.curPlayer))) for x in trainExamples]
 
     def learn(self):
@@ -70,22 +87,24 @@ class Coach():
         only if it wins >= updateThreshold fraction of games.
         """
 
-        for i in range(1, self.args.numIters+1):
+        for i in range(1, self.args.numIters+1): #numIters = 1
             # bookkeeping
             print('------ITER ' + str(i) + '------')
             # examples of the iteration
             if not self.skipFirstSelfPlay or i>1:
+                print ('Coach.py==>learn ', 'self.skipFirstSelfPlay: ', self.skipFirstSelfPlay)
                 iterationTrainExamples = deque([], maxlen=self.args.maxlenOfQueue)
-    
+
                 eps_time = AverageMeter()
                 bar = Bar('Self Play', max=self.args.numEps)
                 end = time.time()
-    
-                for eps in range(self.args.numEps):
+
+                for eps in range(self.args.numEps): #number of epochs=2
                     self.mcts = MCTS(self.game, self.nnet, self.args)   # reset search tree
                     iterationTrainExamples += self.executeEpisode()
-    
-                    # bookkeeping + plot progress
+                    print ('Coach.py==>learn ', 'added to iterationTrainExamples deque self.executeEpisode(): ', self.executeEpisode())
+
+                    # bookkeeping + plot progress :surag
                     eps_time.update(time.time() - end)
                     end = time.time()
                     bar.suffix  = '({eps}/{maxeps}) Eps Time: {et:.3f}s | Total: {total:} | ETA: {eta:}'.format(eps=eps+1, maxeps=self.args.numEps, et=eps_time.avg,
@@ -93,16 +112,19 @@ class Coach():
                     bar.next()
                 bar.finish()
 
-                # save the iteration examples to the history 
+                # save the iteration examples to the history
                 self.trainExamplesHistory.append(iterationTrainExamples)
-                
-            if len(self.trainExamplesHistory) > self.args.numItersForTrainExamplesHistory:
+
+            if len(self.trainExamplesHistory) > self.args.numItersForTrainExamplesHistory: #numItersForTrainExamplesHistory:
+                print('Coach.py==>learn ',' BEFORE REMOVING self.trainExamplesHistory: ', self.trainExamplesHistory)
                 print("len(trainExamplesHistory) =", len(self.trainExamplesHistory), " => remove the oldest trainExamples")
                 self.trainExamplesHistory.pop(0)
+                print('Coach.py==>learn ',' AFTER REMOVING self.trainExamplesHistory: ', self.trainExamplesHistory)
+
             # backup history to a file
-            # NB! the examples were collected using the model from the previous iteration, so (i-1)  
+            # NB! the examples were collected using the model from the previous iteration, so (i-1)
             self.saveTrainExamples(i-1)
-            
+
             # shuffle examlpes before training
             trainExamples = []
             for e in self.trainExamplesHistory:
@@ -113,7 +135,7 @@ class Coach():
             self.nnet.save_checkpoint(folder=self.args.checkpoint, filename='temp.pth.tar')
             self.pnet.load_checkpoint(folder=self.args.checkpoint, filename='temp.pth.tar')
             pmcts = MCTS(self.game, self.pnet, self.args)
-            
+
             self.nnet.train(trainExamples)
             nmcts = MCTS(self.game, self.nnet, self.args)
 
@@ -129,7 +151,7 @@ class Coach():
             else:
                 print('ACCEPTING NEW MODEL')
                 self.nnet.save_checkpoint(folder=self.args.checkpoint, filename=self.getCheckpointFile(i))
-                self.nnet.save_checkpoint(folder=self.args.checkpoint, filename='best.pth.tar')                
+                self.nnet.save_checkpoint(folder=self.args.checkpoint, filename='best.pth.tar')
 
     def getCheckpointFile(self, iteration):
         return 'checkpoint_' + str(iteration) + '.pth.tar'
